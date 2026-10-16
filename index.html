@@ -1,0 +1,633 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Roundabout Rush: a side-scrolling, momentum-based cycling game.">
+<style>*,*::before,*::after{box-sizing:border-box} body{margin:0} [hidden]{display:none!important}</style>
+<title>Roundabout Rush</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:ital,wght@1,700;1,800&family=IBM+Plex+Mono:wght@400;600&family=Press+Start+2P&display=swap">
+<style>
+/* Layout: one-screen race console. Title strip, full-width canvas, key legend below. Single dusk look by choice. */
+:root {
+  --night: #1b2230;
+  --slate: #2a3446;
+  --amber: #f2a541;
+  --rust: #c8553d;
+  --chalk: #eef0ea;
+  --muted: #9aa3b2;
+  --display: "Barlow Condensed", "Arial Narrow", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+body {
+  background: var(--night); color: var(--chalk); font-family: var(--mono);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 16px;
+  box-sizing: border-box;
+}
+.wrap { max-width: 1100px; margin: 0 auto; display: grid; gap: 12px; }
+header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+h1 { font-family: var(--display); font-style: italic; font-weight: 800; font-size: clamp(28px, 5vw, 44px); letter-spacing: .01em; margin: 0; line-height: 1; text-transform: uppercase; }
+h1 span { color: var(--amber); }
+.tag { color: var(--muted); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+.stage { position: relative; width: 100%; border-radius: 6px; overflow: hidden; border: 1px solid var(--slate); }
+canvas { display: block; width: 100%; outline: none; }
+canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
+.legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; }
+.key { display: flex; gap: 10px; align-items: center; padding: 10px 12px; background: var(--slate); border-radius: 4px; font-size: 13px; line-height: 1.35; border: 0; color: var(--chalk); font-family: var(--mono); text-align: left; cursor: pointer; user-select: none; -webkit-user-select: none; touch-action: none; }
+.key.on { background: #3a4760; }
+.key:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+.cap { flex: none; width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid var(--muted); border-radius: 5px; font-size: 16px; color: var(--amber); }
+.key b { display: block; font-family: var(--display); font-style: italic; font-size: 17px; letter-spacing: .04em; text-transform: uppercase; }
+.key small { color: var(--muted); font-size: 12px; }
+.head-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.tbtn { font-family: var(--mono); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--chalk); background: var(--slate); border: 1px solid var(--muted); border-radius: 4px; padding: 6px 10px; cursor: pointer; }
+.tbtn[aria-pressed="false"] { color: var(--muted); }
+.tbtn:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Roundabout <span>Rush</span></h1>
+    <div class="head-right">
+      <div class="tag">Prototype · 4 roundabouts · 885 m course</div>
+      <button class="tbtn" id="music" aria-pressed="true">♪ Music on (M)</button>
+    </div>
+  </header>
+  <div class="stage"><canvas id="game" tabindex="0" aria-label="Cycling game. Use arrow keys."></canvas></div>
+  <div class="legend">
+    <button class="key" id="k-right" data-k="ArrowRight"><span class="cap">→</span><span><b>Pedal</b><small>Move forward along the course</small></span></button>
+    <button class="key" id="k-up" data-k="ArrowUp"><span class="cap">↑</span><span><b>Stand &amp; attack</b><small>More power, burns energy. Empty bar = bonk</small></span></button>
+    <button class="key" id="k-down" data-k="ArrowDown"><span class="cap">↓</span><span><b>Tuck</b><small>Less drag on flats and descents</small></span></button>
+    <button class="key" id="k-left" data-k="ArrowLeft"><span class="cap">←</span><span><b>Brake</b><small>Get under the limit before roundabouts</small></span></button>
+  </div>
+</div>
+
+<script>
+(() => {
+  const cv = document.getElementById('game');
+  const ctx = cv.getContext('2d');
+  const C = { night:'#1b2230', slate:'#2a3446', amber:'#f2a541', rust:'#c8553d', chalk:'#eef0ea', muted:'#9aa3b2', green:'#6fbf73' };
+
+  // ---- Course -------------------------------------------------------------
+  // 10 world units = 1 metre. [length, grade]
+  const SEGS = [
+    [600,0],[700,.12],[200,0],[600,-.15],[500,0],
+    [500,.08],[400,.18],[900,-.12],[500,0],
+    [300,.1],[300,-.1],[300,.1],[450,-.14],[500,0],
+    [600,.1],[300,0],[400,-.09],[500,0],[600,0]
+  ];
+  const STEP = 4;
+  const grades = [];
+  let total = 0;
+  for (const [len,g] of SEGS) { for (let i=0;i<len;i+=STEP) grades.push(g); total += len; }
+  // smooth grade transitions
+  const sm = grades.map((_,i) => { let s=0,n=0; for (let j=-15;j<=15;j++){ const k=i+j; if(k>=0&&k<grades.length){s+=grades[k];n++;} } return s/n; });
+  const H = [0];
+  for (let i=0;i<sm.length;i++) H.push(H[i] + sm[i]*STEP);
+  const COURSE = total;
+  const FINISH = COURSE - 300;
+  const heightAt = x => { x = Math.max(0, Math.min(COURSE-1, x)); const i = Math.floor(x/STEP), t = x/STEP - i; return H[i]*(1-t) + H[i+1]*t; };
+  const gradeAt = x => sm[Math.max(0, Math.min(sm.length-1, Math.floor(x/STEP)))] || 0;
+
+  const KMH = 0.12; // world units/s -> km/h
+  const ROUNDABOUTS = [
+    { x: 2350, limit: 20 },
+    { x: 4650, limit: 18 },
+    { x: 6500, limit: 20 },
+    { x: 8300, limit: 22 },
+  ].map(r => ({ ...r, w: 140, done:false }));
+
+  // ---- Sound: 8-bit theme + effects (Web Audio, starts on first key/tap) ---
+  const SND = (() => {
+    let ac = null, master, music, noiseBuf, nextT = 0, step = 0, on = true;
+    try { on = localStorage.getItem('rr-music') !== 'off'; } catch (e) {}
+    const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
+    // 8 bars of eighth notes. 0 = rest.
+    const MEL = [
+      72,76,79,76, 84,79,76,79,   81,79,76,72, 74,76,74,0,
+      77,81,84,81, 77,81,84,86,   83,79,74,79, 83,86,83,0,
+      81,84,88,84, 81,84,88,86,   84,81,77,81, 84,86,84,81,
+      79,83,86,83, 79,77,76,74,   72,76,79,84, 79,76,72,0
+    ];
+    const ROOTS = [48,48,53,55,57,53,55,48];
+    function ensure() {
+      if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      try { ac = new AC(); } catch (e) { return; }
+      master = ac.createGain(); master.gain.value = 0.5; master.connect(ac.destination);
+      music = ac.createGain(); music.gain.value = on ? 0.32 : 0; music.connect(master);
+      noiseBuf = ac.createBuffer(1, ac.sampleRate * 0.5, ac.sampleRate);
+      const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      nextT = ac.currentTime + 0.05;
+      setInterval(schedule, 25);
+    }
+    function tone(type, f0, t, dur, vol, dest, f1) {
+      const o = ac.createOscillator(), g = ac.createGain();
+      o.type = type; o.frequency.setValueAtTime(f0, t);
+      if (f1) o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.linearRampToValueAtTime(vol, t + 0.006);
+      g.gain.setValueAtTime(vol, t + dur * 0.7);
+      g.gain.linearRampToValueAtTime(0.0001, t + dur);
+      o.connect(g); g.connect(dest); o.start(t); o.stop(t + dur + 0.03);
+    }
+    function noise(t, dur, vol, dest, hp) {
+      const s = ac.createBufferSource(); s.buffer = noiseBuf;
+      const f = ac.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = hp;
+      const g = ac.createGain(); g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      s.connect(f); f.connect(g); g.connect(dest); s.start(t); s.stop(t + dur + 0.03);
+    }
+    function schedule() {
+      while (nextT < ac.currentTime + 0.12) {
+        const bonk = S && S.bonkT > 0;
+        const sd = bonk ? 0.32 : 0.19;             // the band drags when you bonk
+        const shift = bonk ? -5 : 0;
+        const i = step % 64, m = MEL[i], root = ROOTS[i >> 3];
+        if (m) tone('square', mtof(m + shift), nextT, sd * 0.85, 0.11, music);
+        tone('triangle', mtof((i % 2 ? root + 12 : root) + shift), nextT, sd * 0.8, 0.28, music);
+        if (i % 4 === 0) tone('triangle', 160, nextT, 0.09, 0.4, music, 40);
+        if (i % 2) noise(nextT, 0.035, 0.06, music, 7000);
+        if (i % 8 === 4) noise(nextT, 0.08, 0.12, music, 1800);
+        nextT += sd; step++;
+      }
+    }
+    const fx = fn => { if (ac) fn(ac.currentTime + 0.01); };
+    return {
+      ensure,
+      get on() { return on; },
+      toggle() {
+        on = !on;
+        try { localStorage.setItem('rr-music', on ? 'on' : 'off'); } catch (e) {}
+        if (ac) music.gain.setTargetAtTime(on ? 0.32 : 0, ac.currentTime, 0.05);
+      },
+      bonk: () => fx(t => { tone('square', 440, t, 0.35, 0.16, master, 200); tone('square', 330, t + 0.38, 0.6, 0.16, master, 90); }),
+      crash: () => fx(t => { noise(t, 0.45, 0.35, master, 150); tone('square', 140, t, 0.3, 0.14, master, 40); }),
+      clean: () => fx(t => [84, 88, 91].forEach((n, k) => tone('square', mtof(n), t + k * 0.07, 0.09, 0.1, master))),
+      finish: () => fx(t => [72, 76, 79, 84, 79, 84].forEach((n, k) => tone('square', mtof(n), t + k * 0.11, k === 5 ? 0.5 : 0.1, 0.12, master))),
+    };
+  })();
+  const musicBtn = document.getElementById('music');
+  const syncMusicBtn = () => { musicBtn.setAttribute('aria-pressed', String(SND.on)); musicBtn.textContent = SND.on ? '♪ Music on (M)' : '♪ Music off (M)'; };
+  syncMusicBtn();
+  musicBtn.addEventListener('click', () => { SND.ensure(); SND.toggle(); syncMusicBtn(); cv.focus({ preventScroll: true }); });
+
+  // ---- Input --------------------------------------------------------------
+  const keys = { ArrowUp:false, ArrowDown:false, ArrowLeft:false, ArrowRight:false };
+  const btns = {};
+  document.querySelectorAll('.key').forEach(b => {
+    btns[b.dataset.k] = b;
+    const set = v => e => { e.preventDefault(); keys[b.dataset.k] = v; if (v) { SND.ensure(); onStart(); } };
+    b.addEventListener('pointerdown', set(true));
+    b.addEventListener('pointerup', set(false));
+    b.addEventListener('pointerleave', set(false));
+    b.addEventListener('pointercancel', set(false));
+  });
+  addEventListener('keydown', e => {
+    if (e.key in keys) { keys[e.key] = true; e.preventDefault(); SND.ensure(); onStart(); }
+    if ((e.key === 'm' || e.key === 'M') && !e.repeat) { SND.ensure(); SND.toggle(); syncMusicBtn(); }
+    if ((e.key === 'Enter' || e.key === 'r' || e.key === 'R') && (S.mode === 'finished')) reset();
+  });
+  addEventListener('keyup', e => { if (e.key in keys) { keys[e.key] = false; e.preventDefault(); } });
+  addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+  cv.addEventListener('pointerdown', () => { cv.focus(); SND.ensure(); if (S.mode === 'finished') reset(); });
+
+  // ---- State --------------------------------------------------------------
+  let S;
+  function reset() {
+    S = { mode:'ready', x: 120, v: 0, energy: 100, time: 0, penalty: 0, crashes: 0, crashT: 0, bonkT: 0, bonks: 0, crankA: 0, wheelA: 0, msg:'', msgT:0, pose:'sit', best: S ? S.best : null };
+    ROUNDABOUTS.forEach(r => { r.done = false; });
+  }
+  reset();
+  try { const b = localStorage.getItem('rr-best'); if (b) S.best = +b; } catch (e) {}
+  function onStart() { if (S.mode === 'ready') S.mode = 'riding'; }
+  function flash(m, t=1.6) { S.msg = m; S.msgT = t; }
+
+  // ---- Physics ------------------------------------------------------------
+  const G = 500, ROLL = 14, DRAG = 0.00066, DRAG_TUCK = 0.00035;
+  const BONK_KMH = 15, BONK_TIME = 2;
+  function update(dt) {
+    if (S.msgT > 0) S.msgT -= dt;
+    if (S.mode !== 'riding') return;
+    S.time += dt;
+
+    if (S.crashT > 0) { S.crashT -= dt; S.v = 0; return; }
+
+    const up = keys.ArrowUp, down = keys.ArrowDown, right = keys.ArrowRight, left = keys.ArrowLeft;
+    if (S.bonkT > 0) {
+      S.bonkT = Math.max(0, S.bonkT - dt);
+      if (S.bonkT === 0) flash('Legs are back. Go!', 1.2);
+    }
+    const bonked = S.bonkT > 0;
+    const standing = up && S.energy > 0 && !bonked;   // no standing while bonked
+    const tucking = down && !up;
+    const pedaling = right || up;
+
+    let a = 0;
+    if (standing) a += 230;
+    else if (pedaling) a += tucking ? 90 : 120;
+
+    const g = gradeAt(S.x);
+    a -= G * g / Math.sqrt(1 + g*g);
+    const sgn = Math.sign(S.v) || 1;
+    a -= (tucking ? DRAG_TUCK : DRAG) * S.v * S.v * sgn;
+    if (Math.abs(S.v) > 1) a -= ROLL * sgn;
+    if (left) a -= 320 * sgn;
+
+    S.v += a * dt;
+    // bonk: forced down to 15 km/h for the duration
+    if (bonked) { const cap = BONK_KMH / KMH; if (S.v > cap) S.v = Math.max(cap, S.v - 700 * dt); }
+    if (left && Math.abs(S.v) < 6) S.v = 0;
+    if (!pedaling && Math.abs(S.v) < 3 && g >= 0) S.v = Math.min(S.v, 0) * 0.9; // stalled on a hill
+    S.v = Math.max(S.v, -60);
+    S.x = Math.max(60, S.x + S.v * dt);
+
+    // energy
+    if (standing) S.energy -= 24 * dt;
+    else if (pedaling) S.energy += 4 * dt;
+    else S.energy += 11 * dt;
+    if (bonked) S.energy += 11 * dt;
+    if (standing && S.energy <= 0) {
+      S.bonkT = BONK_TIME; S.bonks++;
+      flash('BONK! Out of energy', BONK_TIME);
+      SND.bonk();
+    }
+    S.energy = Math.max(0, Math.min(100, S.energy));
+
+    S.pose = left ? 'brake' : S.bonkT > 0 ? 'bonk' : standing ? 'stand' : tucking ? 'tuck' : 'sit';
+    S.crankA += (pedaling ? Math.max(4, S.v * 0.04) : 0) * dt * (standing ? 1.4 : 1);
+    S.wheelA += S.v * dt / 14;
+
+    // roundabouts
+    for (const r of ROUNDABOUTS) {
+      if (r.done) continue;
+      if (S.x >= r.x - r.w/2) {
+        const kmh = S.v * KMH;
+        if (kmh > r.limit) {
+          S.crashes++; S.penalty += 5; S.crashT = 1.6; S.v = 0;
+          S.x = r.x - r.w/2 + 2;
+          flash(`Too hot! ${kmh.toFixed(0)} km/h into a ${r.limit} zone · +5s`, 2.2);
+          SND.crash();
+        } else {
+          flash('Clean line through the roundabout', 1.2);
+          SND.clean();
+        }
+        r.done = true;
+      }
+    }
+    // speed cap while inside a roundabout
+    for (const r of ROUNDABOUTS) {
+      if (S.x > r.x - r.w/2 && S.x < r.x + r.w/2) S.v = Math.min(S.v, r.limit / KMH);
+    }
+
+    if (S.x >= FINISH) {
+      S.mode = 'finished';
+      SND.finish();
+      const final = S.time + S.penalty;
+      if (!S.best || final < S.best) { S.best = final; S.newBest = true; try { localStorage.setItem('rr-best', String(final)); } catch (e) {} }
+    }
+  }
+
+  // ---- Rendering ----------------------------------------------------------
+  let W = 0, Ht = 0, dpr = 1, camX = 0, camY = 0;
+  function resize() {
+    dpr = Math.min(2, window.devicePixelRatio || 1);
+    W = cv.clientWidth;
+    Ht = Math.round(Math.max(260, Math.min(520, W * 0.52)));
+    cv.style.height = Ht + 'px';
+    cv.width = W * dpr; cv.height = Ht * dpr;
+  }
+  addEventListener('resize', resize); resize();
+
+  const fmt = t => { const m = Math.floor(t/60), s = t - m*60; return `${m}:${s.toFixed(1).padStart(4,'0')}`; };
+
+  function draw() {
+    const sc = Ht / 480;
+    ctx.setTransform(dpr*sc, 0, 0, dpr*sc, 0, 0);
+    const VW = W / sc, VH = 480;
+
+    camX += ((S.x - VW * 0.3) - camX) * 0.2;
+    camY += (heightAt(S.x) - camY) * 0.08;
+    const base = VH * 0.62;
+    const sy = h => base - (h - camY);
+
+    // sky
+    const sky = ctx.createLinearGradient(0,0,0,VH);
+    sky.addColorStop(0,'#1b2230'); sky.addColorStop(.55,'#3b3a52'); sky.addColorStop(.85,'#a8604a'); sky.addColorStop(1,'#f2a541');
+    ctx.fillStyle = sky; ctx.fillRect(0,0,VW,VH);
+    // sun
+    ctx.fillStyle = 'rgba(242,165,65,.55)';
+    ctx.beginPath(); ctx.arc(VW*0.78, VH*0.7, 46, 0, Math.PI*2); ctx.fill();
+
+    // parallax ridges (autumn hills)
+    const ridge = (par, amp, off, col, yb) => {
+      ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(0, VH);
+      for (let px=0; px<=VW+20; px+=20) {
+        const wx = px + camX*par;
+        const y = yb + Math.sin(wx*0.004+off)*amp + Math.sin(wx*0.011+off*2)*amp*0.4;
+        ctx.lineTo(px, y);
+      }
+      ctx.lineTo(VW, VH); ctx.fill();
+    };
+    ridge(0.15, 30, 1, '#4a3f55', VH*0.55);
+    ridge(0.3, 24, 3, '#6b3f3a', VH*0.62);
+    // tree stipple on near ridge
+    for (let i=0;i<40;i++){
+      const wx = Math.floor((camX*0.45)/60)*60 + i*60;
+      const px = wx - camX*0.45;
+      const y = VH*0.68 + Math.sin(wx*0.007)*18;
+      ctx.fillStyle = ['#c8553d','#d9822b','#8a3b2e','#e0a43a'][Math.abs(Math.floor(wx/60))%4];
+      ctx.beginPath(); ctx.moveTo(px, y-20); ctx.lineTo(px-8, y+4); ctx.lineTo(px+8, y+4); ctx.fill();
+    }
+
+    // big roadside speed boards at each roundabout (background layer)
+    const kmhNow = Math.max(0, S.v * KMH);
+    for (const r of ROUNDABOUTS) {
+      const px = r.x - camX;
+      if (px < -220 || px > VW + 220) continue;
+      drawSpeedBoard(px, sy(heightAt(r.x)), r.limit, kmhNow);
+    }
+
+    // terrain
+    ctx.fillStyle = '#2b2f2a';
+    ctx.beginPath(); ctx.moveTo(0, VH);
+    for (let px=-10; px<=VW+10; px+=6) ctx.lineTo(px, sy(heightAt(camX+px)));
+    ctx.lineTo(VW+10, VH); ctx.fill();
+    // verge
+    ctx.strokeStyle = '#4c6b3c'; ctx.lineWidth = 10;
+    ctx.beginPath();
+    for (let px=-10; px<=VW+10; px+=6) { const y = sy(heightAt(camX+px)) + 5; px<0?ctx.moveTo(px,y):ctx.lineTo(px,y); }
+    ctx.stroke();
+    // road surface
+    ctx.strokeStyle = '#3a3d44'; ctx.lineWidth = 7;
+    ctx.beginPath();
+    for (let px=-10; px<=VW+10; px+=6) { const y = sy(heightAt(camX+px)); px<0?ctx.moveTo(px,y):ctx.lineTo(px,y); }
+    ctx.stroke();
+    // centre dashes
+    ctx.strokeStyle = 'rgba(238,240,234,.55)'; ctx.lineWidth = 1.5; ctx.setLineDash([12,14]); ctx.lineDashOffset = camX;
+    ctx.beginPath();
+    for (let px=-10; px<=VW+10; px+=6) { const y = sy(heightAt(camX+px)) - 1; px<0?ctx.moveTo(px,y):ctx.lineTo(px,y); }
+    ctx.stroke(); ctx.setLineDash([]);
+
+    // km markers
+    ctx.font = '600 11px "IBM Plex Mono", monospace'; ctx.textAlign = 'center';
+    for (let m = Math.ceil(camX/1000)*1000; m < camX+VW; m += 1000) {
+      const px = m - camX, y = sy(heightAt(m));
+      ctx.fillStyle = C.chalk; ctx.fillRect(px-1, y-26, 2, 26);
+      ctx.fillStyle = '#eef0ea'; ctx.fillRect(px-12, y-40, 24, 14);
+      ctx.fillStyle = C.night; ctx.fillText(`${m/10}`, px, y-29);
+    }
+
+    // roundabouts + warning signs
+    for (const r of ROUNDABOUTS) {
+      const px = r.x - camX;
+      if (px < -300 || px > VW + 500) continue;
+      // warning sign 450 units before
+      const wx = r.x - 450 - camX, wy = sy(heightAt(r.x - 450));
+      ctx.fillStyle = '#777'; ctx.fillRect(wx-1.5, wy-60, 3, 60);
+      ctx.fillStyle = C.chalk; ctx.beginPath(); ctx.arc(wx, wy-66, 15, 0, Math.PI*2); ctx.fill();
+      ctx.strokeStyle = C.rust; ctx.lineWidth = 4; ctx.stroke();
+      ctx.fillStyle = C.night; ctx.font = '800 italic 16px "Barlow Condensed", sans-serif';
+      ctx.fillText(String(r.limit), wx, wy-60);
+      // roundabout circulation sign
+      const sx2 = r.x - r.w/2 - 30 - camX, sy2 = sy(heightAt(r.x - r.w/2 - 30));
+      ctx.fillStyle = '#777'; ctx.fillRect(sx2-1.5, sy2-50, 3, 50);
+      ctx.fillStyle = '#2f6db5'; ctx.beginPath(); ctx.arc(sx2, sy2-56, 12, 0, Math.PI*2); ctx.fill();
+      ctx.strokeStyle = C.chalk; ctx.lineWidth = 2;
+      for (let i=0;i<3;i++){ const a0 = i*2.094; ctx.beginPath(); ctx.arc(sx2, sy2-56, 6, a0, a0+1.4); ctx.stroke(); }
+      // island
+      const iy = sy(heightAt(r.x));
+      ctx.fillStyle = '#5a5e66'; ctx.beginPath(); ctx.ellipse(px, iy+2, r.w/2, 10, 0, Math.PI, 0); ctx.fill();
+      ctx.fillStyle = '#4c6b3c'; ctx.beginPath(); ctx.ellipse(px, iy-3, r.w/2-14, 9, 0, Math.PI, 0); ctx.fill();
+      // chevron board
+      ctx.fillStyle = C.chalk; ctx.fillRect(px-22, iy-34, 44, 16);
+      ctx.fillStyle = C.rust;
+      for (let i=0;i<3;i++){ const cx = px-14+i*14; ctx.beginPath(); ctx.moveTo(cx-4,iy-32); ctx.lineTo(cx+4,iy-26); ctx.lineTo(cx-4,iy-20); ctx.lineTo(cx-1,iy-26); ctx.fill(); }
+      ctx.fillStyle = '#777'; ctx.fillRect(px-1.5, iy-18, 3, 14);
+      // zone shading
+      ctx.fillStyle = r.done ? 'rgba(111,191,115,.10)' : 'rgba(200,85,61,.12)';
+      ctx.fillRect(px - r.w/2, iy - 120, r.w, 120);
+    }
+
+    // finish line
+    {
+      const px = FINISH - camX, y = sy(heightAt(FINISH));
+      if (px > -60 && px < VW + 60) {
+        ctx.fillStyle = '#777'; ctx.fillRect(px-50, y-90, 4, 90); ctx.fillRect(px+46, y-90, 4, 90);
+        for (let i=0;i<12;i++) for (let j=0;j<2;j++) { ctx.fillStyle = (i+j)%2 ? C.night : C.chalk; ctx.fillRect(px-50+i*8.33, y-104+j*8, 8.4, 8); }
+        ctx.fillStyle = C.amber; ctx.font = '800 italic 18px "Barlow Condensed", sans-serif';
+        ctx.fillText('FINISH', px, y-110);
+        for (let j=0;j<4;j++) { ctx.fillStyle = j%2?C.night:C.chalk; ctx.fillRect(px-3, y-4+0*j, 6, 4); }
+      }
+    }
+
+    drawRider(S.x - camX, sy(heightAt(S.x)));
+
+    drawHUD(VW, VH);
+  }
+
+  const PIX = '"Press Start 2P", "IBM Plex Mono", monospace';
+  function drawSpeedBoard(cx, groundY, limit, kmh) {
+    const over = kmh > limit;
+    const stat = over ? '#e5383b' : '#38b000';
+    const bw = 280, bh = 104, top = groundY - 230, left = cx - bw / 2;
+    // legs
+    ctx.fillStyle = '#4a4f58';
+    ctx.fillRect(left + 30, top + bh, 6, groundY - top - bh);
+    ctx.fillRect(left + bw - 36, top + bh, 6, groundY - top - bh);
+    // board
+    ctx.fillStyle = '#151a24'; ctx.fillRect(left, top, bw, bh);
+    ctx.strokeStyle = stat; ctx.lineWidth = 4; ctx.strokeRect(left + 2, top + 2, bw - 4, bh - 4);
+    // limit roundel
+    const rx = left + 58, ry = top + bh / 2;
+    ctx.fillStyle = '#f5f5f0'; ctx.beginPath(); ctx.arc(rx, ry, 40, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = stat; ctx.lineWidth = 9; ctx.beginPath(); ctx.arc(rx, ry, 35, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = '#151a24'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = `20px ${PIX}`; ctx.fillText(String(limit), rx + 1, ry + 2);
+    // your speed LED
+    const lx = left + 178;
+    ctx.fillStyle = '#9aa3b2'; ctx.font = `8px ${PIX}`;
+    ctx.fillText('YOUR SPEED', lx, top + 20);
+    ctx.fillStyle = stat; ctx.font = `34px ${PIX}`;
+    ctx.shadowColor = stat; ctx.shadowBlur = 12;
+    ctx.fillText(String(Math.round(kmh)).padStart(2, '0'), lx, ry + 6);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = stat; ctx.font = `8px ${PIX}`;
+    ctx.fillText(over ? 'SLOW DOWN' : 'THANK YOU', lx, top + bh - 14);
+    ctx.textBaseline = 'alphabetic';
+  }
+
+  function drawRider(px, py) {
+    const g = gradeAt(S.x);
+    ctx.save();
+    ctx.translate(px, py - 2);
+    ctx.rotate(-Math.atan(g));
+    if (S.crashT > 0) { ctx.rotate((1.6 - S.crashT) * 4); }
+    const wr = 9;
+    // wheels
+    for (const wx of [-12, 12]) {
+      ctx.strokeStyle = C.chalk; ctx.lineWidth = 2.2;
+      ctx.beginPath(); ctx.arc(wx, -wr, wr, 0, Math.PI*2); ctx.stroke();
+      ctx.lineWidth = 1;
+      for (let k=0;k<3;k++){ const a = S.wheelA + k*Math.PI/3; ctx.beginPath(); ctx.moveTo(wx+Math.cos(a)*wr, -wr+Math.sin(a)*wr); ctx.lineTo(wx-Math.cos(a)*wr, -wr-Math.sin(a)*wr); ctx.stroke(); }
+    }
+    // frame
+    ctx.strokeStyle = C.amber; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.moveTo(-12,-wr); ctx.lineTo(0,-wr); ctx.lineTo(9,-wr-10); ctx.lineTo(-3,-wr-10); ctx.closePath(); ctx.moveTo(9,-wr-10); ctx.lineTo(12,-wr); ctx.stroke();
+    // crank
+    const ca = S.crankA * 6;
+    ctx.strokeStyle = C.chalk; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(Math.cos(ca)*5, -wr+Math.sin(ca)*5); ctx.lineTo(-Math.cos(ca)*5, -wr-Math.sin(ca)*5); ctx.stroke();
+
+    // block rider (body changes with pose)
+    let bw = 12, bh = 18, bx = -6, by = -wr - 28, hx = 2, hy = -wr - 34;
+    if (S.pose === 'stand') { bh = 24; by = -wr - 36; bx = -3; hx = 5; hy = -wr - 42; }
+    if (S.pose === 'tuck')  { bw = 20; bh = 9;  bx = -8; by = -wr - 20; hx = 13; hy = -wr - 22; }
+    if (S.pose === 'brake') { bx = -9; hx = -1; }
+    if (S.pose === 'bonk')  { bh = 15; by = -wr - 24; bx = -5; hx = 9; hy = -wr - 24; }
+    ctx.fillStyle = C.rust; ctx.fillRect(bx, by, bw, bh);
+    ctx.fillStyle = C.chalk; ctx.fillRect(hx - 4, hy - 4, 8, 8);
+    ctx.fillStyle = C.night; ctx.fillRect(hx - 4, hy - 4, 8, 3); // helmet band
+    if (S.pose === 'brake') { ctx.fillStyle = '#ff3b30'; ctx.fillRect(-16, -wr - 12, 4, 3); }
+    // dizzy pixels circling a bonked rider
+    if (S.pose === 'bonk') {
+      const t = performance.now() / 180;
+      for (let k = 0; k < 3; k++) {
+        const a = t + k * 2.09;
+        ctx.fillStyle = k % 2 ? C.amber : C.chalk;
+        ctx.fillRect(hx + Math.cos(a) * 9 - 1.5, hy - 12 + Math.sin(a) * 3 - 1.5, 3, 3);
+      }
+    }
+    // effort sweat when standing
+    if (S.pose === 'stand' && (performance.now()/120|0)%2) { ctx.fillStyle = '#9fd3ff'; ctx.fillRect(-10, by - 4, 2, 3); }
+    ctx.restore();
+  }
+
+  function drawHUD(VW, VH) {
+    const kmh = Math.max(0, S.v * KMH);
+    // panel
+    ctx.fillStyle = 'rgba(27,34,48,.82)'; ctx.fillRect(12, 12, 230, 108);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = C.muted; ctx.font = '600 10px "IBM Plex Mono", monospace';
+    ctx.fillText('SPEED', 24, 30); ctx.fillText('ENERGY', 24, 84);
+    ctx.fillStyle = C.chalk; ctx.font = '800 italic 40px "Barlow Condensed", sans-serif';
+    ctx.fillText(kmh.toFixed(0), 24, 68);
+    ctx.font = '600 12px "IBM Plex Mono", monospace'; ctx.fillStyle = C.muted;
+    ctx.fillText('km/h', 24 + ctx.measureText('000').width * 2.3, 66);
+    // gradient readout
+    const gpc = gradeAt(S.x) * 100;
+    ctx.textAlign = 'right'; ctx.fillStyle = gpc > 3 ? C.rust : gpc < -3 ? C.green : C.chalk;
+    ctx.font = '600 16px "IBM Plex Mono", monospace';
+    ctx.fillText(`${gpc >= 0 ? '+' : ''}${gpc.toFixed(0)}%`, 230, 66);
+    ctx.fillStyle = C.muted; ctx.font = '600 10px "IBM Plex Mono", monospace'; ctx.fillText('GRADE', 230, 30);
+    // energy bar
+    ctx.textAlign = 'left';
+    ctx.fillStyle = C.slate; ctx.fillRect(24, 92, 206, 12);
+    ctx.fillStyle = S.energy < 20 ? C.rust : C.amber; ctx.fillRect(24, 92, 206 * S.energy/100, 12);
+    if (S.bonkT > 0 && (performance.now()/150|0)%2) { ctx.strokeStyle = C.rust; ctx.lineWidth = 2; ctx.strokeRect(23, 91, 208, 14); }
+
+    // right panel: time + next roundabout
+    const pw = 220, px0 = VW - pw - 12;
+    ctx.fillStyle = 'rgba(27,34,48,.82)'; ctx.fillRect(px0, 12, pw, 108);
+    ctx.fillStyle = C.muted; ctx.font = '600 10px "IBM Plex Mono", monospace';
+    ctx.fillText('TIME', px0 + 12, 30); ctx.fillText('TO FINISH', px0 + 120, 30); ctx.fillText('NEXT ROUNDABOUT', px0 + 12, 84);
+    ctx.fillStyle = C.chalk; ctx.font = '600 18px "IBM Plex Mono", monospace';
+    ctx.fillText(fmt(S.time + S.penalty), px0 + 12, 56);
+    ctx.fillText(`${Math.max(0, (FINISH - S.x)/10).toFixed(0)} m`, px0 + 120, 56);
+    if (S.penalty) { ctx.fillStyle = C.rust; ctx.font = '600 10px "IBM Plex Mono", monospace'; ctx.fillText(`incl. +${S.penalty}s`, px0 + 12, 70); }
+    const next = ROUNDABOUTS.find(r => !r.done);
+    ctx.font = '600 13px "IBM Plex Mono", monospace';
+    if (next) {
+      const d = (next.x - next.w/2 - S.x)/10;
+      const over = kmh > next.limit;
+      ctx.fillStyle = d < 45 && over ? C.rust : C.chalk;
+      ctx.fillText(`${d.toFixed(0)} m · limit ${next.limit}`, px0 + 12, 104);
+    } else { ctx.fillStyle = C.green; ctx.fillText('All clear to the line', px0 + 12, 104); }
+
+    // brake warning flash
+    if (next && S.mode === 'riding') {
+      const d = (next.x - next.w/2 - S.x)/10;
+      if (d < 45 && d > 0 && kmh > next.limit && (performance.now()/200|0)%2) {
+        ctx.textAlign = 'center'; ctx.fillStyle = C.rust; ctx.font = '800 italic 30px "Barlow Condensed", sans-serif';
+        ctx.fillText('BRAKE!  ←', VW/2, 160);
+      }
+    }
+
+    // bonk banner
+    if (S.bonkT > 0 && S.mode === 'riding') {
+      ctx.fillStyle = 'rgba(40,48,40,.28)'; ctx.fillRect(0, 0, VW, VH);
+      const jit = (performance.now() / 90 | 0) % 2 ? 2 : -2;
+      ctx.textAlign = 'center';
+      ctx.font = `44px ${PIX}`;
+      ctx.fillStyle = C.rust; ctx.fillText('BONK!', VW / 2 + 4 + jit, 196);
+      ctx.fillStyle = C.amber; ctx.fillText('BONK!', VW / 2 + jit, 192);
+      ctx.font = `10px ${PIX}`; ctx.fillStyle = C.chalk;
+      ctx.fillText(`LEGS GONE · ${BONK_KMH} KM/H · NO STANDING`, VW / 2, 224);
+      const bw = 200; ctx.fillStyle = C.slate; ctx.fillRect(VW / 2 - bw / 2, 236, bw, 8);
+      ctx.fillStyle = C.amber; ctx.fillRect(VW / 2 - bw / 2, 236, bw * S.bonkT / BONK_TIME, 8);
+    }
+
+    // message
+    if (S.msgT > 0 && !(S.bonkT > 0)) {
+      ctx.textAlign = 'center'; ctx.globalAlpha = Math.min(1, S.msgT);
+      ctx.fillStyle = 'rgba(27,34,48,.85)';
+      ctx.font = '600 14px "IBM Plex Mono", monospace';
+      const tw = ctx.measureText(S.msg).width + 28;
+      ctx.fillRect(VW/2 - tw/2, VH - 64, tw, 32);
+      ctx.fillStyle = C.chalk; ctx.fillText(S.msg, VW/2, VH - 43);
+      ctx.globalAlpha = 1;
+    }
+
+    // course profile minimap
+    const mw = Math.min(360, VW - 48), mx = VW/2 - mw/2, my = VH - 22;
+    ctx.strokeStyle = 'rgba(238,240,234,.45)'; ctx.lineWidth = 1.5; ctx.beginPath();
+    const hmin = Math.min(...H), hmax = Math.max(...H);
+    for (let i=0;i<=60;i++){ const wx = COURSE*i/60; const y = my - (heightAt(wx)-hmin)/(hmax-hmin)*16; i?ctx.lineTo(mx+mw*i/60,y):ctx.moveTo(mx,y); }
+    ctx.stroke();
+    for (const r of ROUNDABOUTS) { ctx.fillStyle = r.done ? C.green : C.rust; ctx.fillRect(mx + mw*r.x/COURSE - 1.5, my + 2, 3, 4); }
+    ctx.fillStyle = C.amber; ctx.beginPath(); ctx.arc(mx + mw*S.x/COURSE, my - (heightAt(S.x)-hmin)/(hmax-hmin)*16, 3.5, 0, Math.PI*2); ctx.fill();
+
+    // overlays
+    if (S.mode === 'ready') overlay(VW, VH, 'Press → to roll out', 'Climb, descend, and scrub speed before every roundabout.');
+    if (S.mode === 'finished') {
+      const final = S.time + S.penalty;
+      overlay(VW, VH, `Finished · ${fmt(final)}`,
+        `Ride ${fmt(S.time)} + ${S.penalty}s penalties · ${S.crashes} crash${S.crashes===1?'':'es'} · ${S.bonks} bonk${S.bonks===1?'':'s'}` + (S.best ? ` · Best ${fmt(S.best)}` : ''),
+        'Press Enter or tap to ride again');
+    }
+  }
+
+  function overlay(VW, VH, title, sub, sub2) {
+    ctx.fillStyle = 'rgba(27,34,48,.72)'; ctx.fillRect(0, VH*0.32, VW, 120);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = C.amber; ctx.font = '800 italic 40px "Barlow Condensed", sans-serif';
+    ctx.fillText(title.toUpperCase(), VW/2, VH*0.32 + 50);
+    ctx.fillStyle = C.chalk; ctx.font = '400 13px "IBM Plex Mono", monospace';
+    ctx.fillText(sub, VW/2, VH*0.32 + 78);
+    if (sub2) { ctx.fillStyle = C.muted; ctx.fillText(sub2, VW/2, VH*0.32 + 100); }
+  }
+
+  // ---- Loop ---------------------------------------------------------------
+  let last = performance.now(), acc = 0;
+  function frame(now) {
+    acc += Math.min(0.1, (now - last) / 1000); last = now;
+    while (acc >= 1/120) { update(1/120); acc -= 1/120; }
+    for (const k in btns) btns[k].classList.toggle('on', keys[k]);
+    draw();
+    requestAnimationFrame(frame);
+  }
+  camX = S.x - 200; camY = heightAt(S.x);
+  if (document.fonts && document.fonts.load) document.fonts.load(`20px ${PIX}`).catch(() => {});
+  cv.focus({ preventScroll: true });
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
