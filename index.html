@@ -56,7 +56,7 @@ canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
   <header>
     <h1>Roundabout <span>Rush</span></h1>
     <div class="head-right">
-      <div class="tag">Prototype · 4 roundabouts · 885 m course</div>
+      <div class="tag">Prototype · 2 levels</div>
       <button class="tbtn" id="music" aria-pressed="true">♪ Music on (M)</button>
     </div>
   </header>
@@ -66,6 +66,7 @@ canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
     <button class="key" id="k-up" data-k="ArrowUp"><span class="cap">↑</span><span><b>Stand &amp; attack</b><small>More power, burns energy. Empty bar = bonk</small></span></button>
     <button class="key" id="k-down" data-k="ArrowDown"><span class="cap">↓</span><span><b>Tuck</b><small>Less drag on flats and descents</small></span></button>
     <button class="key" id="k-left" data-k="ArrowLeft"><span class="cap">←</span><span><b>Brake</b><small>Get under the limit before roundabouts</small></span></button>
+    <button class="key" id="k-jump" data-k="Jump"><span class="cap" style="font-size:10px">SPC</span><span><b>Bunny hop</b><small>Jump over opening car doors</small></span></button>
   </div>
 </div>
 
@@ -75,34 +76,81 @@ canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
   const ctx = cv.getContext('2d');
   const C = { night:'#1b2230', slate:'#2a3446', amber:'#f2a541', rust:'#c8553d', chalk:'#eef0ea', muted:'#9aa3b2', green:'#6fbf73' };
 
-  // ---- Course -------------------------------------------------------------
-  // 10 world units = 1 metre. [length, grade]
-  const SEGS = [
-    [600,0],[700,.12],[200,0],[600,-.15],[500,0],
-    [500,.08],[400,.18],[900,-.12],[500,0],
-    [300,.1],[300,-.1],[300,.1],[450,-.14],[500,0],
-    [600,.1],[300,0],[400,-.09],[500,0],[600,0]
+  // ---- Levels -------------------------------------------------------------
+  // 10 world units = 1 metre. Segments: [length, grade, climb name (optional)]
+  const LEVELS = [
+    { id: 'orr', name: 'Ocean Road Rollers', blurb: 'Coastal rollers · 4 roundabouts',
+      segs: [
+        [600,0],[700,.12],[200,0],[600,-.15],[500,0],
+        [500,.08],[400,.18],[900,-.12],[500,0],
+        [300,.1],[300,-.1],[300,.1],[450,-.14],[500,0],
+        [600,.1],[300,0],[400,-.09],[500,0],[600,0]
+      ],
+      roundabouts: [ { x: 2350, limit: 20 }, { x: 4650, limit: 18 }, { x: 6500, limit: 20 }, { x: 8300, limit: 22 } ],
+      finishOffset: 300 },
+    { id: 'pwmnr', name: 'PWMNR', blurb: 'Five named climbs · traffic lights · car doors · Sagamore summit',
+      segs: [
+        [500,0],
+        [350,.14,'Mt. Newington'],
+        [400,-.08],[300,0],
+        [900,.07,'Post Road'],
+        [400,-.06],[200,0],
+        [250,.06,'The Road'],[250,-.06,'The Road'],[250,.07,'The Road'],
+        [250,-.07,'The Road'],[250,.06,'The Road'],[250,-.05,'The Road'],
+        [1500,0],
+        [300,.22,'Wallis Sands Sprint'],
+        [300,-.08],[400,0],
+        [1600,.06,'Sagamore'],
+        [300,0]
+      ],
+      roundabouts: [],
+      // stop lines: after Mt. Newington, and at the foot of the Post Road descent
+      lights: [ { x: 1460, offset: 0 }, { x: 2960, offset: 0.7 } ],
+      // parked cars on the long flat before Wallis Sands; doors open at random
+      cars: [4800, 5060, 5300, 5560, 5800],
+      finishOffset: 300 },  // finish line sits at the top of Sagamore
   ];
+
   const STEP = 4;
-  const grades = [];
-  let total = 0;
-  for (const [len,g] of SEGS) { for (let i=0;i<len;i+=STEP) grades.push(g); total += len; }
-  // smooth grade transitions
-  const sm = grades.map((_,i) => { let s=0,n=0; for (let j=-15;j<=15;j++){ const k=i+j; if(k>=0&&k<grades.length){s+=grades[k];n++;} } return s/n; });
-  const H = [0];
-  for (let i=0;i<sm.length;i++) H.push(H[i] + sm[i]*STEP);
-  const COURSE = total;
-  const FINISH = COURSE - 300;
+  // traffic light cycle (seconds), driven by ride time so every run sees the same timing
+  const LIGHT_G = 0.5, LIGHT_Y = 0.5, LIGHT_R = 0.5, LIGHT_CYCLE = LIGHT_G + LIGHT_Y + LIGHT_R;
+  let LIGHTS = [], CARS = [];
+  const DOOR_REACH = 700;   // doors only start opening once you are within 70 m
+  let LV, sm, H, COURSE, FINISH, ROUNDABOUTS, CLIMBS, HMIN, HMAX, levelIdx = 0;
+  function loadLevel(idx) {
+    levelIdx = idx; LV = LEVELS[idx];
+    const bounds = []; let acc = 0; CLIMBS = [];
+    for (const [len, g, name] of LV.segs) {
+      if (name) {
+        const last = CLIMBS[CLIMBS.length - 1];
+        if (last && last.name === name && last.x1 === acc) { last.x1 += len; last.maxG = Math.max(last.maxG, g); last.minG = Math.min(last.minG, g); }
+        else CLIMBS.push({ name, x0: acc, x1: acc + len, maxG: g, minG: g, entered: false, crested: false });
+      }
+      bounds.push([acc, acc + len, g]); acc += len;
+    }
+    const grades = [];
+    const n = Math.ceil(acc / STEP);
+    for (let k = 0, j = 0; k < n; k++) {
+      const x = k * STEP + STEP / 2;
+      while (j < bounds.length - 1 && x >= bounds[j][1]) j++;
+      grades.push(bounds[j][2]);
+    }
+    // smooth grade transitions
+    sm = grades.map((_, i) => { let s = 0, c = 0; for (let d = -15; d <= 15; d++) { const k = i + d; if (k >= 0 && k < grades.length) { s += grades[k]; c++; } } return s / c; });
+    H = [0];
+    for (let i = 0; i < sm.length; i++) H.push(H[i] + sm[i] * STEP);
+    COURSE = acc;
+    FINISH = COURSE - LV.finishOffset;
+    ROUNDABOUTS = LV.roundabouts.map(r => ({ ...r, w: 140, done: false }));
+    LIGHTS = (LV.lights || []).map(l => ({ ...l, done: false }));
+    CARS = (LV.cars || []).map(x => ({ x, doorX: x + 10 }));
+    HMIN = Math.min(...H); HMAX = Math.max(...H);
+  }
+  loadLevel(0);
   const heightAt = x => { x = Math.max(0, Math.min(COURSE-1, x)); const i = Math.floor(x/STEP), t = x/STEP - i; return H[i]*(1-t) + H[i+1]*t; };
   const gradeAt = x => sm[Math.max(0, Math.min(sm.length-1, Math.floor(x/STEP)))] || 0;
 
   const KMH = 0.12; // world units/s -> km/h
-  const ROUNDABOUTS = [
-    { x: 2350, limit: 20 },
-    { x: 4650, limit: 18 },
-    { x: 6500, limit: 20 },
-    { x: 8300, limit: 22 },
-  ].map(r => ({ ...r, w: 140, done:false }));
 
   // ---- Sound: 8-bit theme + effects (Web Audio, starts on first key/tap) ---
   const SND = (() => {
@@ -170,6 +218,9 @@ canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
       },
       bonk: () => fx(t => { tone('square', 440, t, 0.35, 0.16, master, 200); tone('square', 330, t + 0.38, 0.6, 0.16, master, 90); }),
       crash: () => fx(t => { noise(t, 0.45, 0.35, master, 150); tone('square', 140, t, 0.3, 0.14, master, 40); }),
+      boost: () => fx(t => [76, 81, 88, 93].forEach((n, k) => tone('square', mtof(n), t + k * 0.05, 0.07, 0.1, master))),
+      hop: () => fx(t => tone('square', 300, t, 0.12, 0.09, master, 700)),
+      blip: () => fx(t => tone('square', 990, t, 0.045, 0.07, master)),
       clean: () => fx(t => [84, 88, 91].forEach((n, k) => tone('square', mtof(n), t + k * 0.07, 0.09, 0.1, master))),
       finish: () => fx(t => [72, 76, 79, 84, 79, 84].forEach((n, k) => tone('square', mtof(n), t + k * 0.11, k === 5 ? 0.5 : 0.1, 0.12, master))),
     };
@@ -184,30 +235,104 @@ canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
   const btns = {};
   document.querySelectorAll('.key').forEach(b => {
     btns[b.dataset.k] = b;
-    const set = v => e => { e.preventDefault(); keys[b.dataset.k] = v; if (v) { SND.ensure(); onStart(); } };
+    const set = v => e => {
+      e.preventDefault(); SND.ensure();
+      if (b.dataset.k === 'Jump') { if (v && e.type === 'pointerdown') jump(); b.classList.toggle('on', v && e.type === 'pointerdown'); return; }
+      if (S.mode === 'menu') { keys[b.dataset.k] = false; if (v && e.type === 'pointerdown') menuKey(b.dataset.k); return; }
+      keys[b.dataset.k] = v; if (v) onStart();
+    };
     b.addEventListener('pointerdown', set(true));
     b.addEventListener('pointerup', set(false));
     b.addEventListener('pointerleave', set(false));
     b.addEventListener('pointercancel', set(false));
   });
   addEventListener('keydown', e => {
-    if (e.key in keys) { keys[e.key] = true; e.preventDefault(); SND.ensure(); onStart(); }
-    if ((e.key === 'm' || e.key === 'M') && !e.repeat) { SND.ensure(); SND.toggle(); syncMusicBtn(); }
-    if ((e.key === 'Enter' || e.key === 'r' || e.key === 'R') && (S.mode === 'finished')) reset();
+    SND.ensure();
+    if (e.key === ' ' || e.code === 'Space') { e.preventDefault(); if (S.mode !== 'menu' && !e.repeat) jump(); return; }
+    if (S.mode === 'menu') { if (menuKey(e.key, e.repeat)) e.preventDefault(); return; }
+    if (e.key in keys) { keys[e.key] = true; e.preventDefault(); onStart(); }
+    if ((e.key === 'm' || e.key === 'M') && !e.repeat) { SND.toggle(); syncMusicBtn(); }
+    if ((e.key === 'Enter' || e.key === 'r' || e.key === 'R') && (S.mode === 'finished')) { reset(); snapCam(); }
+    if (e.key === 'Escape') goMenu(1);
   });
   addEventListener('keyup', e => { if (e.key in keys) { keys[e.key] = false; e.preventDefault(); } });
   addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
-  cv.addEventListener('pointerdown', () => { cv.focus(); SND.ensure(); if (S.mode === 'finished') reset(); });
+  cv.addEventListener('pointerdown', () => {
+    cv.focus(); SND.ensure();
+    if (S.mode === 'menu') menuKey('Enter');
+    else if (S.mode === 'finished') { reset(); snapCam(); }
+  });
 
   // ---- State --------------------------------------------------------------
+  const bestKey = id => 'rr-best-' + id;
+  function getBest(id) {
+    try {
+      const b = localStorage.getItem(bestKey(id)) || (id === 'orr' ? localStorage.getItem('rr-best') : null);
+      return b ? +b : null;
+    } catch (e) { return null; }
+  }
   let S;
   function reset() {
-    S = { mode:'ready', x: 120, v: 0, energy: 100, time: 0, penalty: 0, crashes: 0, crashT: 0, bonkT: 0, bonks: 0, crankA: 0, wheelA: 0, msg:'', msgT:0, pose:'sit', best: S ? S.best : null };
+    S = { mode:'ready', x: 120, v: 0, energy: 100, time: 0, penalty: 0, crashes: 0, crashT: 0, bonkT: 0, bonks: 0, crankA: 0, wheelA: 0, msg:'', msgT:0, pose:'sit', best: getBest(LV.id) };
     ROUNDABOUTS.forEach(r => { r.done = false; });
+    CLIMBS.forEach(c => { c.entered = c.crested = false; });
+    LIGHTS.forEach(l => { l.done = false; });
+    CARS.forEach(c => { c.open = false; c.f = 0; c.done = false; c.t = 0.3 + Math.random() * 1.5; });
+    S.jy = 0; S.jv = 0; S.carIntro = false;
   }
-  reset();
-  try { const b = localStorage.getItem('rr-best'); if (b) S.best = +b; } catch (e) {}
+  function jump() {
+    if (S.mode === 'ready') onStart();
+    if (S.mode !== 'riding' || S.crashT > 0 || S.jy > 0) return;
+    S.jv = 330; S.jy = 0.01; SND.hop();
+  }
+  const lightClock = () => S.mode === 'menu' ? performance.now() / 1000 : S.time;
+  function lightState(L) {
+    const p = ((lightClock() + L.offset) % LIGHT_CYCLE + LIGHT_CYCLE) % LIGHT_CYCLE;
+    if (p < LIGHT_G) return { c: 'green', left: LIGHT_G - p };
+    if (p < LIGHT_G + LIGHT_Y) return { c: 'yellow', left: LIGHT_G + LIGHT_Y - p };
+    return { c: 'red', left: LIGHT_CYCLE - p };
+  }
+  const LAMP = { green: '#38b000', yellow: '#ffc300', red: '#e5383b' };
   function onStart() { if (S.mode === 'ready') S.mode = 'riding'; }
+
+  // ---- Main menu: 3-letter name, then level select -------------------------
+  const ABC = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const M = { step: 0, slot: 0, name: ['A','A','A'], sel: 0, bests: LEVELS.map(l => getBest(l.id)) };
+  try {
+    const n = localStorage.getItem('rr-name');
+    if (n && /^[A-Z]{3}$/.test(n)) { M.name = n.split(''); M.step = 1; }
+    const l = +localStorage.getItem('rr-level');
+    if (l >= 0 && l < LEVELS.length) M.sel = l;
+  } catch (e) {}
+  const playerName = () => M.name.join('');
+  function saveMenu() { try { localStorage.setItem('rr-name', playerName()); localStorage.setItem('rr-level', String(M.sel)); } catch (e) {} }
+  function previewLevel() { loadLevel(M.sel); reset(); S.mode = 'menu'; snapCam(); }
+  function goMenu(step) { M.step = step; for (const k in keys) keys[k] = false; previewLevel(); }
+  function startLevel() { saveMenu(); loadLevel(M.sel); reset(); snapCam(); SND.blip(); }
+  function menuKey(k, repeat) {
+    if (M.step === 0) {
+      if (k === 'ArrowUp' || k === 'ArrowDown') {
+        const d = k === 'ArrowUp' ? 1 : -1, c = ABC.indexOf(M.name[M.slot]);
+        M.name[M.slot] = ABC[(c + d + 26) % 26]; SND.blip(); return true;
+      }
+      if (k === 'ArrowLeft' || k === 'Backspace') { M.slot = Math.max(0, M.slot - 1); SND.blip(); return true; }
+      if (k === 'ArrowRight') { if (M.slot < 2) M.slot++; else { M.step = 1; saveMenu(); } SND.blip(); return true; }
+      if (/^[a-z]$/i.test(k) && !repeat) { M.name[M.slot] = k.toUpperCase(); if (M.slot < 2) M.slot++; SND.blip(); return true; }
+      if (k === 'Enter') { M.step = 1; saveMenu(); SND.blip(); return true; }
+      return false;
+    }
+    if (k === 'ArrowUp' || k === 'ArrowDown') {
+      M.sel = (M.sel + (k === 'ArrowDown' ? 1 : -1) + LEVELS.length) % LEVELS.length;
+      previewLevel(); SND.blip(); return true;
+    }
+    if (k === 'Enter' || k === 'ArrowRight') { startLevel(); return true; }
+    if (k === 'Escape' || k === 'Backspace' || k === 'ArrowLeft') { M.step = 0; M.slot = 0; SND.blip(); return true; }
+    if ((k === 'm' || k === 'M') && !repeat) { SND.toggle(); syncMusicBtn(); return true; }
+    return false;
+  }
+  loadLevel(M.sel);
+  reset();
+  S.mode = 'menu';
   function flash(m, t=1.6) { S.msg = m; S.msgT = t; }
 
   // ---- Physics ------------------------------------------------------------
@@ -215,6 +340,11 @@ canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
   const BONK_KMH = 15, BONK_TIME = 2;
   function update(dt) {
     if (S.msgT > 0) S.msgT -= dt;
+    if (S.mode === 'menu') {   // attract mode: rider cruises the selected course behind the menu
+      S.v = 160; S.x += S.v * dt; S.wheelA += S.v * dt / 14; S.crankA += 5 * dt; S.pose = 'sit';
+      if (S.x > FINISH) { S.x = 120; snapCam(); }
+      return;
+    }
     if (S.mode !== 'riding') return;
     S.time += dt;
 
@@ -247,7 +377,32 @@ canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
     if (left && Math.abs(S.v) < 6) S.v = 0;
     if (!pedaling && Math.abs(S.v) < 3 && g >= 0) S.v = Math.min(S.v, 0) * 0.9; // stalled on a hill
     S.v = Math.max(S.v, -60);
+    const prevX = S.x;
     S.x = Math.max(60, S.x + S.v * dt);
+    // bunny hop
+    if (S.jy > 0) { S.jv -= 1100 * dt; S.jy += S.jv * dt; if (S.jy <= 0) { S.jy = 0; S.jv = 0; } }
+
+    // parked cars: doors swing open at random while you approach
+    if (CARS.length && !S.carIntro && S.x >= CARS[0].x - 450) { S.carIntro = true; flash('Parked cars ahead · SPACE to hop open doors', 2.4); }
+    for (const c of CARS) {
+      const d = c.doorX - S.x;
+      if (d > -40 && d < DOOR_REACH) {
+        c.t -= dt;
+        if (c.t <= 0) { c.open = !c.open; c.t = c.open ? 0.7 + Math.random() * 1.1 : 0.4 + Math.random() * 1.6; }
+      } else if (d <= -40) c.open = false;
+      c.f += ((c.open ? 1 : 0) - c.f) * Math.min(1, dt * 12);
+      if (!c.done && prevX < c.doorX && S.x >= c.doorX) {
+        c.done = true;
+        if (c.f > 0.45) {
+          if (S.jy < 16) {
+            S.crashes++; S.penalty += 5; S.crashT = 1.6; S.v = 0; S.jy = 0; S.jv = 0; S.x = c.doorX + 6;
+            flash('Doored! Crash · +5s', 2.2); SND.crash();
+            return;
+          }
+          flash('Bunny hop! Cleared the door', 1.2); SND.clean();
+        }
+      }
+    }
 
     // energy
     if (standing) S.energy -= 24 * dt;
@@ -282,16 +437,47 @@ canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
         r.done = true;
       }
     }
+    // traffic lights: judged at the moment the rider crosses the stop line
+    for (const L of LIGHTS) {
+      if (L.done || S.x < L.x) continue;
+      L.done = true;
+      const st = lightState(L).c;
+      if (st === 'red') {
+        S.crashes++; S.penalty += 5; S.crashT = 1.6; S.v = 0; S.x = L.x + 4;
+        flash('Ran the red! Crash · +5s', 2.2);
+        SND.crash();
+      } else if (st === 'green') {
+        S.v *= 1.10;
+        flash('Green light! +10% speed', 1.3);
+        SND.boost();
+      } else {
+        flash('Squeaked through on yellow', 1.2);
+      }
+    }
+
     // speed cap while inside a roundabout
     for (const r of ROUNDABOUTS) {
       if (S.x > r.x - r.w/2 && S.x < r.x + r.w/2) S.v = Math.min(S.v, r.limit / KMH);
+    }
+
+    // named climbs
+    for (const c of CLIMBS) {
+      if (!c.entered && S.x >= c.x0) {
+        c.entered = true;
+        flash(`${c.name} · ${climbStats(c)}`, 2.2);
+      }
+      if (c.entered && !c.crested && S.x >= c.x1 && c.x1 < FINISH) { c.crested = true; flash(`Crested ${c.name}`, 1.4); SND.clean(); }
     }
 
     if (S.x >= FINISH) {
       S.mode = 'finished';
       SND.finish();
       const final = S.time + S.penalty;
-      if (!S.best || final < S.best) { S.best = final; S.newBest = true; try { localStorage.setItem('rr-best', String(final)); } catch (e) {} }
+      S.newBest = false;
+      if (!S.best || final < S.best) {
+        S.best = final; S.newBest = true; M.bests[levelIdx] = final;
+        try { localStorage.setItem(bestKey(LV.id), String(final)); } catch (e) {}
+      }
     }
   }
 
@@ -306,6 +492,10 @@ canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
   }
   addEventListener('resize', resize); resize();
 
+  function snapCam() { camX = S.x - 200; camY = heightAt(S.x); }
+  const climbStats = c => c.minG < 0
+    ? `rollers · ${Math.round((c.x1 - c.x0) / 10)} m · up to ${Math.round(c.maxG * 100)}%`
+    : `${Math.round((c.x1 - c.x0) / 10)} m · max ${Math.round(c.maxG * 100)}%`;
   const fmt = t => { const m = Math.floor(t/60), s = t - m*60; return `${m}:${s.toFixed(1).padStart(4,'0')}`; };
 
   function draw() {
@@ -347,12 +537,37 @@ canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
       ctx.beginPath(); ctx.moveTo(px, y-20); ctx.lineTo(px-8, y+4); ctx.lineTo(px+8, y+4); ctx.fill();
     }
 
+    // climb titles: huge background text that slides in, holds mid-screen, then slides out
+    for (const c of CLIMBS) {
+      const aS = c.x0 - camX + 420, aE = c.x1 - camX - 60;
+      const tx = Math.min(Math.max(aS, VW / 2), aE);
+      if (tx < -500 || tx > VW + 500) continue;
+      const title = c.name.toUpperCase();
+      let fs = 92;
+      ctx.font = `800 italic ${fs}px "Barlow Condensed", sans-serif`;
+      const w = ctx.measureText(title).width;
+      if (w > VW * 0.9) { fs = Math.floor(fs * VW * 0.9 / w); ctx.font = `800 italic ${fs}px "Barlow Condensed", sans-serif`; }
+      ctx.textAlign = 'center';
+      ctx.fillStyle = 'rgba(238,240,234,.17)'; ctx.fillText(title, tx, 222);
+      ctx.strokeStyle = 'rgba(242,165,65,.45)'; ctx.lineWidth = 1.5; ctx.strokeText(title, tx, 222);
+      ctx.font = `10px ${PIX}`; ctx.fillStyle = 'rgba(238,240,234,.55)';
+      ctx.fillText(climbStats(c).toUpperCase(), tx, 246);
+      if (c === CLIMBS[CLIMBS.length - 1] && c.x1 >= FINISH) { ctx.fillStyle = 'rgba(242,165,65,.75)'; ctx.fillText('MOUNTAIN-TOP FINISH', tx, 264); }
+    }
+
     // big roadside speed boards at each roundabout (background layer)
     const kmhNow = Math.max(0, S.v * KMH);
     for (const r of ROUNDABOUTS) {
       const px = r.x - camX;
       if (px < -220 || px > VW + 220) continue;
       drawSpeedBoard(px, sy(heightAt(r.x)), r.limit, kmhNow);
+    }
+
+    // big background signal boards at each traffic light
+    for (const L of LIGHTS) {
+      const px = L.x - camX;
+      if (px < -220 || px > VW + 220) continue;
+      drawSignalBoard(px, sy(heightAt(L.x)), lightState(L));
     }
 
     // terrain
@@ -416,6 +631,23 @@ canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
       ctx.fillRect(px - r.w/2, iy - 120, r.w, 120);
     }
 
+    // traffic light poles + stop lines
+    for (const L of LIGHTS) {
+      const px = L.x - camX;
+      if (px < -60 || px > VW + 60) continue;
+      const y = sy(heightAt(L.x)), st = lightState(L).c;
+      ctx.fillStyle = C.chalk; ctx.fillRect(px - 2, y - 4, 4, 6);            // stop line
+      ctx.fillStyle = '#4a4f58'; ctx.fillRect(px + 8, y - 80, 4, 80);        // pole
+      ctx.fillStyle = '#151a24'; ctx.fillRect(px + 2, y - 118, 16, 42);      // housing
+      ['red', 'yellow', 'green'].forEach((c, k) => {
+        const on = st === c;
+        ctx.fillStyle = on ? LAMP[c] : 'rgba(238,240,234,.12)';
+        if (on) { ctx.shadowColor = LAMP[c]; ctx.shadowBlur = 14; }
+        ctx.beginPath(); ctx.arc(px + 10, y - 110 + k * 13, 5, 0, Math.PI * 2); ctx.fill();
+        ctx.shadowBlur = 0;
+      });
+    }
+
     // finish line
     {
       const px = FINISH - camX, y = sy(heightAt(FINISH));
@@ -428,7 +660,43 @@ canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
       }
     }
 
-    drawRider(S.x - camX, sy(heightAt(S.x)));
+    // parked cars (behind the bike lane)
+    const CAR_COLS = ['#5f7fa3', '#a34a3d', '#d9d2c3', '#3f6b4f', '#7a6a8f'];
+    const carVis = CARS.map((c, i) => ({ c, px: c.x - camX, gy: sy(heightAt(c.x)) - 4, col: CAR_COLS[i % CAR_COLS.length] }))
+      .filter(o => o.px > -80 && o.px < VW + 80);
+    for (const { c, px, gy, col } of carVis) {
+      ctx.fillStyle = 'rgba(0,0,0,.25)'; ctx.fillRect(px - 36, gy - 3, 78, 3);
+      ctx.fillStyle = col; ctx.fillRect(px - 34, gy - 20, 74, 13);
+      ctx.fillRect(px - 22, gy - 32, 44, 12);
+      ctx.fillStyle = 'rgba(190,220,240,.55)'; ctx.fillRect(px - 19, gy - 30, 17, 8); ctx.fillRect(px + 1, gy - 30, 17, 8);
+      ctx.fillStyle = '#151a24';
+      for (const wx of [px - 20, px + 26]) { ctx.beginPath(); ctx.arc(wx, gy - 6, 6, 0, Math.PI * 2); ctx.fill(); }
+      ctx.fillStyle = '#ffd27a'; ctx.fillRect(px + 37, gy - 18, 3, 3);   // headlight
+      ctx.fillStyle = '#e5383b'; ctx.fillRect(px - 34, gy - 18, 2, 3);   // tail light
+      ctx.strokeStyle = 'rgba(21,26,36,.6)'; ctx.lineWidth = 1; ctx.strokeRect(px - 10, gy - 31, 20, 23);
+      if (c.f > 0.05) { ctx.fillStyle = 'rgba(21,26,36,.85)'; ctx.fillRect(px - 10, gy - 31, 20 * c.f, 23); }  // doorway
+    }
+
+    if (S.jy > 0) {   // shadow under a hopping rider
+      const gx = S.x - camX, gyR = sy(heightAt(S.x));
+      ctx.fillStyle = 'rgba(0,0,0,.3)'; ctx.beginPath(); ctx.ellipse(gx, gyR, 16 - Math.min(8, S.jy / 6), 3, 0, 0, Math.PI * 2); ctx.fill();
+    }
+    drawRider(S.x - camX, sy(heightAt(S.x)) - S.jy);
+
+    // open doors swing out into the bike lane, drawn in front of the rider
+    for (const { c, px, gy, col } of carVis) {
+      if (c.f < 0.05) continue;
+      const hx = px + 10, w = 20 * (1 - 0.5 * c.f), dy = 10 * c.f;
+      ctx.fillStyle = col;
+      ctx.beginPath(); ctx.moveTo(hx, gy - 31); ctx.lineTo(hx - w, gy - 31 + dy); ctx.lineTo(hx - w, gy - 6 + dy); ctx.lineTo(hx, gy - 8); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = C.amber; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.fillStyle = 'rgba(190,220,240,.55)';
+      ctx.beginPath(); ctx.moveTo(hx - 1, gy - 29); ctx.lineTo(hx - w + 2, gy - 29 + dy); ctx.lineTo(hx - w + 2, gy - 22 + dy); ctx.lineTo(hx - 1, gy - 22); ctx.closePath(); ctx.fill();
+      if (c.f > 0.45 && (performance.now() / 150 | 0) % 2) {
+        ctx.fillStyle = C.amber; ctx.textAlign = 'center'; ctx.font = `12px ${PIX}`;
+        ctx.fillText('!', px, gy - 42);
+      }
+    }
 
     drawHUD(VW, VH);
   }
@@ -461,6 +729,33 @@ canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
     ctx.shadowBlur = 0;
     ctx.fillStyle = stat; ctx.font = `8px ${PIX}`;
     ctx.fillText(over ? 'SLOW DOWN' : 'THANK YOU', lx, top + bh - 14);
+    ctx.textBaseline = 'alphabetic';
+  }
+
+  function drawSignalBoard(cx, groundY, st) {
+    const bw = 280, bh = 104, top = groundY - 230, left = cx - bw / 2;
+    const col = LAMP[st.c];
+    ctx.fillStyle = '#4a4f58';
+    ctx.fillRect(left + 30, top + bh, 6, groundY - top - bh);
+    ctx.fillRect(left + bw - 36, top + bh, 6, groundY - top - bh);
+    ctx.fillStyle = '#151a24'; ctx.fillRect(left, top, bw, bh);
+    ctx.strokeStyle = col; ctx.lineWidth = 4; ctx.strokeRect(left + 2, top + 2, bw - 4, bh - 4);
+    // three big lamps
+    ['red', 'yellow', 'green'].forEach((c, k) => {
+      const lx = left + 36 + k * 50, ly = top + bh / 2, on = st.c === c;
+      ctx.fillStyle = on ? LAMP[c] : 'rgba(238,240,234,.08)';
+      if (on) { ctx.shadowColor = LAMP[c]; ctx.shadowBlur = 22; }
+      ctx.beginPath(); ctx.arc(lx, ly, 20, 0, Math.PI * 2); ctx.fill();
+      ctx.shadowBlur = 0;
+    });
+    // countdown + instruction
+    const tx = left + 228;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#9aa3b2'; ctx.font = `8px ${PIX}`; ctx.fillText('SIGNAL', tx, top + 20);
+    ctx.fillStyle = col; ctx.font = `26px ${PIX}`;
+    ctx.fillText(st.left.toFixed(1), tx, top + bh / 2 + 4);
+    ctx.font = `8px ${PIX}`;
+    ctx.fillText(st.c === 'green' ? 'GO +10%' : st.c === 'yellow' ? 'SLOW' : 'STOP', tx, top + bh - 16);
     ctx.textBaseline = 'alphabetic';
   }
 
@@ -510,7 +805,61 @@ canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
     ctx.restore();
   }
 
+  function drawMenu(VW, VH) {
+    ctx.fillStyle = 'rgba(27,34,48,.8)'; ctx.fillRect(0, 0, VW, VH);
+    ctx.textAlign = 'center';
+    ctx.font = `26px ${PIX}`;
+    ctx.fillStyle = C.rust; ctx.fillText('ROUNDABOUT RUSH', VW / 2 + 3, 72);
+    ctx.fillStyle = C.amber; ctx.fillText('ROUNDABOUT RUSH', VW / 2, 69);
+
+    const blink = (performance.now() / 400 | 0) % 2;
+    // player initials
+    ctx.font = '600 10px "IBM Plex Mono", monospace'; ctx.fillStyle = C.muted;
+    ctx.fillText('PLAYER', VW / 2, 108);
+    for (let i = 0; i < 3; i++) {
+      const bx = VW / 2 - 84 + i * 60, by = 118, active = M.step === 0 && M.slot === i;
+      ctx.fillStyle = active ? '#3a4760' : C.slate; ctx.fillRect(bx, by, 48, 56);
+      ctx.strokeStyle = active ? C.amber : (M.step === 0 ? C.muted : 'rgba(154,163,178,.4)'); ctx.lineWidth = 2; ctx.strokeRect(bx + 1, by + 1, 46, 54);
+      ctx.fillStyle = C.chalk; ctx.font = `26px ${PIX}`; ctx.fillText(M.name[i], bx + 25, by + 42);
+      if (active) {
+        ctx.fillStyle = C.amber;
+        ctx.beginPath(); ctx.moveTo(bx + 24, by - 10); ctx.lineTo(bx + 18, by - 3); ctx.lineTo(bx + 30, by - 3); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(bx + 24, by + 66); ctx.lineTo(bx + 18, by + 59); ctx.lineTo(bx + 30, by + 59); ctx.fill();
+        if (blink) ctx.fillRect(bx + 10, by + 48, 28, 3);
+      }
+    }
+
+    // level select
+    ctx.font = '600 10px "IBM Plex Mono", monospace'; ctx.fillStyle = C.muted;
+    ctx.fillText('SELECT LEVEL', VW / 2, 210);
+    const rw = Math.min(540, VW - 60), rx = VW / 2 - rw / 2;
+    LEVELS.forEach((l, i) => {
+      const ry = 222 + i * 58, sel = i === M.sel, live = sel && M.step === 1;
+      ctx.fillStyle = sel ? '#3a4760' : C.slate; ctx.fillRect(rx, ry, rw, 50);
+      if (sel) { ctx.strokeStyle = live ? C.amber : C.muted; ctx.lineWidth = 2; ctx.strokeRect(rx + 1, ry + 1, rw - 2, 48); }
+      if (live && blink) { ctx.fillStyle = C.amber; ctx.beginPath(); ctx.moveTo(rx + 12, ry + 17); ctx.lineTo(rx + 24, ry + 25); ctx.lineTo(rx + 12, ry + 33); ctx.fill(); }
+      ctx.textAlign = 'left';
+      ctx.fillStyle = C.chalk; ctx.font = '800 italic 24px "Barlow Condensed", sans-serif';
+      ctx.fillText(l.name.toUpperCase(), rx + 34, ry + 25);
+      ctx.fillStyle = C.muted; ctx.font = '400 11px "IBM Plex Mono", monospace';
+      ctx.fillText(l.blurb, rx + 34, ry + 42);
+      ctx.textAlign = 'right'; ctx.font = '600 12px "IBM Plex Mono", monospace';
+      const b = M.bests[i];
+      ctx.fillStyle = b ? C.amber : C.muted;
+      ctx.fillText(b ? `BEST ${fmt(b)}` : 'NO TIME YET', rx + rw - 14, ry + 30);
+      ctx.textAlign = 'center';
+    });
+
+    ctx.fillStyle = C.chalk; ctx.font = '400 12px "IBM Plex Mono", monospace';
+    ctx.fillText(M.step === 0
+      ? '↑↓ change letter · ←→ move · or type A–Z · Enter (or tap) to confirm'
+      : '↑↓ choose level · Enter (or tap) to ride · Esc to edit name', VW / 2, 368);
+    ctx.fillStyle = C.muted; ctx.font = `8px ${PIX}`;
+    ctx.fillText('GLOBAL LEADERBOARD · COMING SOON', VW / 2, 394);
+  }
+
   function drawHUD(VW, VH) {
+    if (S.mode === 'menu') { drawMenu(VW, VH); return; }
     const kmh = Math.max(0, S.v * KMH);
     // panel
     ctx.fillStyle = 'rgba(27,34,48,.82)'; ctx.fillRect(12, 12, 230, 108);
@@ -537,18 +886,30 @@ canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
     const pw = 220, px0 = VW - pw - 12;
     ctx.fillStyle = 'rgba(27,34,48,.82)'; ctx.fillRect(px0, 12, pw, 108);
     ctx.fillStyle = C.muted; ctx.font = '600 10px "IBM Plex Mono", monospace';
-    ctx.fillText('TIME', px0 + 12, 30); ctx.fillText('TO FINISH', px0 + 120, 30); ctx.fillText('NEXT ROUNDABOUT', px0 + 12, 84);
+    ctx.fillText('TIME', px0 + 12, 30); ctx.fillText('TO FINISH', px0 + 120, 30);
+    const nl = LIGHTS.find(l => !l.done);
+    ctx.fillText(ROUNDABOUTS.length ? 'NEXT ROUNDABOUT' : nl && (nl.x - S.x) / 10 < 90 ? 'TRAFFIC LIGHT' : 'CLIMB', px0 + 12, 84);
     ctx.fillStyle = C.chalk; ctx.font = '600 18px "IBM Plex Mono", monospace';
     ctx.fillText(fmt(S.time + S.penalty), px0 + 12, 56);
     ctx.fillText(`${Math.max(0, (FINISH - S.x)/10).toFixed(0)} m`, px0 + 120, 56);
     if (S.penalty) { ctx.fillStyle = C.rust; ctx.font = '600 10px "IBM Plex Mono", monospace'; ctx.fillText(`incl. +${S.penalty}s`, px0 + 12, 70); }
     const next = ROUNDABOUTS.find(r => !r.done);
+    const nextLight = LIGHTS.find(l => !l.done);
     ctx.font = '600 13px "IBM Plex Mono", monospace';
     if (next) {
       const d = (next.x - next.w/2 - S.x)/10;
       const over = kmh > next.limit;
       ctx.fillStyle = d < 45 && over ? C.rust : C.chalk;
       ctx.fillText(`${d.toFixed(0)} m · limit ${next.limit}`, px0 + 12, 104);
+    } else if (nextLight && (nextLight.x - S.x) / 10 < 90) {
+      const st = lightState(nextLight).c;
+      ctx.fillStyle = LAMP[st]; ctx.font = '600 12px "IBM Plex Mono", monospace';
+      ctx.fillText(`Light · ${Math.round((nextLight.x - S.x) / 10)} m · ${st.toUpperCase()}`, px0 + 12, 104);
+    } else if (!ROUNDABOUTS.length) {
+      const on = CLIMBS.find(c => S.x >= c.x0 && S.x < c.x1);
+      const up = CLIMBS.find(c => S.x < c.x0);
+      ctx.fillStyle = on ? C.amber : C.chalk; ctx.font = '600 12px "IBM Plex Mono", monospace';
+      ctx.fillText(on ? `On ${on.name}` : up ? `${up.name} · ${Math.round((up.x0 - S.x) / 10)} m` : 'Run for the line', px0 + 12, 104);
     } else { ctx.fillStyle = C.green; ctx.fillText('All clear to the line', px0 + 12, 104); }
 
     // brake warning flash
@@ -557,6 +918,16 @@ canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
       if (d < 45 && d > 0 && kmh > next.limit && (performance.now()/200|0)%2) {
         ctx.textAlign = 'center'; ctx.fillStyle = C.rust; ctx.font = '800 italic 30px "Barlow Condensed", sans-serif';
         ctx.fillText('BRAKE!  ←', VW/2, 160);
+      }
+    }
+
+    // traffic light approach warnings
+    if (nextLight && S.mode === 'riding' && S.crashT <= 0) {
+      const d = (nextLight.x - S.x) / 10, st = lightState(nextLight).c;
+      if (d > 0 && d < 50 && st !== 'green' && (performance.now() / 200 | 0) % 2) {
+        ctx.textAlign = 'center'; ctx.fillStyle = LAMP[st];
+        ctx.font = '800 italic 30px "Barlow Condensed", sans-serif';
+        ctx.fillText(st === 'red' ? 'RED LIGHT · STOP  ←' : 'YELLOW · SLOW DOWN', VW / 2, 160);
       }
     }
 
@@ -588,19 +959,25 @@ canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
     // course profile minimap
     const mw = Math.min(360, VW - 48), mx = VW/2 - mw/2, my = VH - 22;
     ctx.strokeStyle = 'rgba(238,240,234,.45)'; ctx.lineWidth = 1.5; ctx.beginPath();
-    const hmin = Math.min(...H), hmax = Math.max(...H);
+    const hmin = HMIN, hmax = HMAX;
+    for (const c of CLIMBS) { ctx.fillStyle = 'rgba(242,165,65,.6)'; ctx.fillRect(mx + mw * c.x0 / COURSE, my + 2, Math.max(2, mw * (c.x1 - c.x0) / COURSE), 2); }
     for (let i=0;i<=60;i++){ const wx = COURSE*i/60; const y = my - (heightAt(wx)-hmin)/(hmax-hmin)*16; i?ctx.lineTo(mx+mw*i/60,y):ctx.moveTo(mx,y); }
     ctx.stroke();
     for (const r of ROUNDABOUTS) { ctx.fillStyle = r.done ? C.green : C.rust; ctx.fillRect(mx + mw*r.x/COURSE - 1.5, my + 2, 3, 4); }
+    for (const L of LIGHTS) { ctx.fillStyle = L.done ? 'rgba(238,240,234,.4)' : LAMP[lightState(L).c]; ctx.fillRect(mx + mw*L.x/COURSE - 2, my + 1, 4, 5); }
     ctx.fillStyle = C.amber; ctx.beginPath(); ctx.arc(mx + mw*S.x/COURSE, my - (heightAt(S.x)-hmin)/(hmax-hmin)*16, 3.5, 0, Math.PI*2); ctx.fill();
 
     // overlays
-    if (S.mode === 'ready') overlay(VW, VH, 'Press → to roll out', 'Climb, descend, and scrub speed before every roundabout.');
+    // rider + level tag under the left panel
+    ctx.textAlign = 'left'; ctx.fillStyle = 'rgba(238,240,234,.75)'; ctx.font = `8px ${PIX}`;
+    ctx.fillText(`${playerName()} · ${LV.name.toUpperCase()}`, 14, 136);
+
+    if (S.mode === 'ready') overlay(VW, VH, 'Press → to roll out', `${playerName()} on ${LV.name} · ${LV.blurb}`, 'Esc: main menu');
     if (S.mode === 'finished') {
       const final = S.time + S.penalty;
-      overlay(VW, VH, `Finished · ${fmt(final)}`,
-        `Ride ${fmt(S.time)} + ${S.penalty}s penalties · ${S.crashes} crash${S.crashes===1?'':'es'} · ${S.bonks} bonk${S.bonks===1?'':'s'}` + (S.best ? ` · Best ${fmt(S.best)}` : ''),
-        'Press Enter or tap to ride again');
+      overlay(VW, VH, S.newBest ? `New best · ${fmt(final)}` : `Finished · ${fmt(final)}`,
+        `${playerName()} · ride ${fmt(S.time)} + ${S.penalty}s penalties · ${S.crashes} crash${S.crashes===1?'':'es'} · ${S.bonks} bonk${S.bonks===1?'':'s'}` + (S.best ? ` · Best ${fmt(S.best)}` : ''),
+        'Enter or tap: ride again · Esc: main menu');
     }
   }
 
@@ -619,11 +996,11 @@ canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
   function frame(now) {
     acc += Math.min(0.1, (now - last) / 1000); last = now;
     while (acc >= 1/120) { update(1/120); acc -= 1/120; }
-    for (const k in btns) btns[k].classList.toggle('on', keys[k]);
+    for (const k in btns) if (k in keys) btns[k].classList.toggle('on', keys[k]);
     draw();
     requestAnimationFrame(frame);
   }
-  camX = S.x - 200; camY = heightAt(S.x);
+  snapCam();
   if (document.fonts && document.fonts.load) document.fonts.load(`20px ${PIX}`).catch(() => {});
   cv.focus({ preventScroll: true });
   requestAnimationFrame(frame);
