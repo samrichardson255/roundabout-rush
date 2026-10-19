@@ -2,9 +2,17 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="description" content="Roundabout Rush: a side-scrolling, momentum-based cycling game.">
-<style>*,*::before,*::after{box-sizing:border-box} body{margin:0} [hidden]{display:none!important}</style>
+<meta name="theme-color" content="#1b2230">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Roundabout Rush">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<style>*,*::before,*::after{box-sizing:border-box} html{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)} body{margin:0} [hidden]{display:none!important}</style>
 <title>Roundabout Rush</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -49,6 +57,33 @@ canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
 .tbtn { font-family: var(--mono); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--chalk); background: var(--slate); border: 1px solid var(--muted); border-radius: 4px; padding: 6px 10px; cursor: pointer; }
 .tbtn[aria-pressed="false"] { color: var(--muted); }
 .tbtn:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+
+/* ---- Touch layout: game fills the screen, thumb pads in the corners ---- */
+.tpad, .tbar, .rotate { display: none; }
+html.touch, html.touch body { height: 100%; overflow: hidden; overscroll-behavior: none; }
+html.touch body { position: fixed; inset: 0; padding: 0; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+html.touch .wrap { position: absolute; inset: 0; max-width: none; display: block; }
+html.touch header, html.touch .legend { display: none; }
+html.touch .stage { position: absolute; inset: 0; border: 0; border-radius: 0; }
+html.touch .tpad { display: flex; position: absolute; bottom: max(20px, env(safe-area-inset-bottom, 0px)); gap: 12px; align-items: flex-end; }
+html.touch .tpad.left { left: max(14px, env(safe-area-inset-left, 0px)); }
+html.touch .tpad.right { right: max(14px, env(safe-area-inset-right, 0px)); }
+html.touch[data-mode="menu"] .tpad { display: none; }
+.tcol { display: flex; flex-direction: column; gap: 12px; }
+.pad { --s: clamp(54px, 18vmin, 82px); width: var(--s); height: var(--s); border-radius: 50%; padding: 0; border: 2px solid rgba(238,240,234,.35); background: rgba(27,34,48,.55); color: var(--chalk); font-family: var(--display); font-style: italic; font-weight: 800; font-size: 14px; letter-spacing: .04em; line-height: 1.05; text-transform: uppercase; display: grid; place-items: center; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.pad .ar { display: block; font-family: var(--mono); font-style: normal; font-size: 19px; color: var(--amber); }
+.pad.big { --s: clamp(66px, 23vmin, 100px); }
+.pad.small { --s: clamp(46px, 14vmin, 64px); font-size: 12px; }
+.pad.on { background: rgba(242,165,65,.45); border-color: var(--amber); }
+html.touch .tbar { display: flex; position: absolute; top: max(8px, env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%); gap: 8px; }
+html.touch[data-mode="menu"] .tbar { left: auto; right: max(10px, env(safe-area-inset-right, 0px)); transform: none; }
+html.touch[data-mode="menu"] #tMenu { display: none; }
+html.touch .tbar .tbtn { background: rgba(27,34,48,.75); padding: 7px 11px; }
+.rotate { position: absolute; inset: 0; z-index: 5; background: var(--night); color: var(--chalk); flex-direction: column; align-items: center; justify-content: center; gap: 10px; text-align: center; padding: 24px; }
+.rotate .ico { font-size: 44px; color: var(--amber); }
+.rotate b { font-family: var(--display); font-style: italic; font-size: 26px; text-transform: uppercase; letter-spacing: .03em; }
+.rotate small { color: var(--muted); font-size: 13px; }
+@media (orientation: portrait) { html.touch .rotate { display: flex; } }
 </style>
 </head>
 <body>
@@ -61,7 +96,26 @@ canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
       <button class="tbtn" id="music" aria-pressed="true">♪ Music on (M)</button>
     </div>
   </header>
-  <div class="stage"><canvas id="game" tabindex="0" aria-label="Cycling game. Use arrow keys."></canvas></div>
+  <div class="stage">
+    <canvas id="game" tabindex="0" aria-label="Cycling game. Use arrow keys."></canvas>
+    <div class="tbar">
+      <button class="tbtn" id="tMenu">☰ Menu</button>
+      <button class="tbtn" id="tMusic" aria-pressed="true">♪ On</button>
+      <button class="tbtn" id="tFull">⛶ Full screen</button>
+    </div>
+    <div class="tpad left">
+      <div class="tcol">
+        <button class="pad" data-k="ArrowUp" aria-label="Stand"><span><span class="ar">↑</span>Stand</span></button>
+        <button class="pad" data-k="ArrowDown" aria-label="Tuck"><span><span class="ar">↓</span>Tuck</span></button>
+      </div>
+      <button class="pad small" data-k="Jump" aria-label="Bunny hop"><span><span class="ar">⤒</span>Hop</span></button>
+    </div>
+    <div class="tpad right">
+      <button class="pad" data-k="ArrowLeft" aria-label="Brake"><span><span class="ar">←</span>Brake</span></button>
+      <button class="pad big" data-k="ArrowRight" aria-label="Pedal"><span><span class="ar">→</span>Pedal</span></button>
+    </div>
+    <div class="rotate"><div class="ico">⟳</div><b>Turn your phone sideways</b><small>Roundabout Rush plays in landscape.</small></div>
+  </div>
   <div class="legend">
     <button class="key" id="k-right" data-k="ArrowRight"><span class="cap">→</span><span><b>Pedal</b><small>Move forward along the course</small></span></button>
     <button class="key" id="k-up" data-k="ArrowUp"><span class="cap">↑</span><span><b>Stand &amp; attack</b><small>More power, burns energy. Empty bar = bonk</small></span></button>
@@ -227,16 +281,46 @@ canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
     };
   })();
   const musicBtn = document.getElementById('music');
-  const syncMusicBtn = () => { musicBtn.setAttribute('aria-pressed', String(SND.on)); musicBtn.textContent = SND.on ? '♪ Music on (M)' : '♪ Music off (M)'; };
+  const tMusic = document.getElementById('tMusic');
+  const syncMusicBtn = () => {
+    musicBtn.setAttribute('aria-pressed', String(SND.on)); musicBtn.textContent = SND.on ? '♪ Music on (M)' : '♪ Music off (M)';
+    tMusic.setAttribute('aria-pressed', String(SND.on)); tMusic.textContent = SND.on ? '♪ On' : '♪ Off';
+  };
   syncMusicBtn();
-  document.getElementById('menuBtn').addEventListener('click', () => { SND.ensure(); goMenu(S.mode === 'menu' ? 0 : 1); cv.focus({ preventScroll: true }); });
-  musicBtn.addEventListener('click', () => { SND.ensure(); SND.toggle(); syncMusicBtn(); cv.focus({ preventScroll: true }); });
+  const toMenu = () => { SND.ensure(); goMenu(S.mode === 'menu' ? 0 : 1); cv.focus({ preventScroll: true }); };
+  const toggleMusic = () => { SND.ensure(); SND.toggle(); syncMusicBtn(); cv.focus({ preventScroll: true }); };
+  document.getElementById('menuBtn').addEventListener('click', toMenu);
+  document.getElementById('tMenu').addEventListener('click', toMenu);
+  musicBtn.addEventListener('click', toggleMusic);
+  tMusic.addEventListener('click', toggleMusic);
+
+  // ---- Full screen (Android Chrome, iPad, desktop; iPhone Safari has no page full screen) ----
+  const docEl = document.documentElement;
+  const isFull = () => !!(document.fullscreenElement || document.webkitFullscreenElement);
+  const canFull = !!(docEl.requestFullscreen || docEl.webkitRequestFullscreen);
+  function goFullscreen() {
+    if (!canFull || isFull()) return;
+    try {
+      const p = docEl.requestFullscreen ? docEl.requestFullscreen({ navigationUI: 'hide' }) : docEl.webkitRequestFullscreen();
+      Promise.resolve(p).then(() => {
+        try { if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {}); } catch (e) {}
+      }).catch(() => {});
+    } catch (e) {}
+  }
+  function toggleFullscreen() {
+    if (isFull()) { try { (document.exitFullscreen || document.webkitExitFullscreen).call(document); } catch (e) {} }
+    else goFullscreen();
+  }
+  const tFull = document.getElementById('tFull');
+  tFull.hidden = !canFull;
+  tFull.addEventListener('click', toggleFullscreen);
 
   // ---- Input --------------------------------------------------------------
   const keys = { ArrowUp:false, ArrowDown:false, ArrowLeft:false, ArrowRight:false };
   const btns = {};
-  document.querySelectorAll('.key').forEach(b => {
-    btns[b.dataset.k] = b;
+  document.querySelectorAll('[data-k]').forEach(b => {
+    (btns[b.dataset.k] = btns[b.dataset.k] || []).push(b);
+    b.addEventListener('contextmenu', e => e.preventDefault());
     const set = v => e => {
       e.preventDefault(); SND.ensure();
       if (b.dataset.k === 'Jump') { if (v && e.type === 'pointerdown') jump(); b.classList.toggle('on', v && e.type === 'pointerdown'); return; }
@@ -263,7 +347,13 @@ canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
     cv.focus({ preventScroll: true }); SND.ensure();
     if (S.mode === 'menu') menuPointerDown(e);
     else if (S.mode === 'finished') { reset(); snapCam(); }
+    else if (TOUCH && S.mode === 'riding') jump();      // on phones, tap the road to hop
   });
+  // keep the page itself from scrolling, zooming or long-pressing on touch screens
+  document.addEventListener('touchmove', e => { if (TOUCH) e.preventDefault(); }, { passive: false });
+  document.addEventListener('gesturestart', e => e.preventDefault());
+  document.addEventListener('dblclick', e => { if (TOUCH) e.preventDefault(); });
+  document.addEventListener('contextmenu', e => { if (TOUCH) e.preventDefault(); });
 
   // ---- State --------------------------------------------------------------
   const bestKey = id => 'rr-best-' + id;
@@ -310,7 +400,7 @@ canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
   function saveMenu() { try { localStorage.setItem('rr-name', playerName()); localStorage.setItem('rr-level', String(M.sel)); } catch (e) {} }
   function previewLevel() { loadLevel(M.sel); reset(); S.mode = 'menu'; snapCam(); }
   function goMenu(step) { M.step = step; for (const k in keys) keys[k] = false; previewLevel(); }
-  function startLevel() { saveMenu(); loadLevel(M.sel); reset(); snapCam(); SND.blip(); }
+  function startLevel() { saveMenu(); loadLevel(M.sel); reset(); snapCam(); SND.blip(); if (TOUCH) goFullscreen(); }
   function menuKey(k, repeat) {
     if (M.step === 0) {
       if (k === 'ArrowUp' || k === 'ArrowDown') {
@@ -385,7 +475,7 @@ canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
     if (S.jy > 0) { S.jv -= 1100 * dt; S.jy += S.jv * dt; if (S.jy <= 0) { S.jy = 0; S.jv = 0; } }
 
     // parked cars: doors swing open at random while you approach
-    if (CARS.length && !S.carIntro && S.x >= CARS[0].x - 450) { S.carIntro = true; flash('Parked cars ahead · SPACE to hop open doors', 2.4); }
+    if (CARS.length && !S.carIntro && S.x >= CARS[0].x - 450) { S.carIntro = true; flash(TOUCH ? 'Parked cars ahead · tap HOP or the road to jump doors' : 'Parked cars ahead · SPACE to hop open doors', 2.4); }
     for (const c of CARS) {
       const d = c.doorX - S.x;
       if (d > -40 && d < DOOR_REACH) {
@@ -484,15 +574,40 @@ canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
   }
 
   // ---- Rendering ----------------------------------------------------------
-  let W = 0, Ht = 0, dpr = 1, camX = 0, camY = 0;
+  let W = 0, Ht = 0, dpr = 1, camX = 0, camY = 0, TOUCH = false;
   function resize() {
     dpr = Math.min(2, window.devicePixelRatio || 1);
-    W = cv.clientWidth;
-    Ht = Math.round(Math.max(260, Math.min(520, W * 0.52)));
+    if (TOUCH) {                         // fill the whole screen
+      const st = cv.parentElement;
+      W = st.clientWidth; Ht = Math.max(200, st.clientHeight);
+    } else {
+      W = cv.clientWidth;
+      Ht = Math.round(Math.max(260, Math.min(520, W * 0.52)));
+    }
     cv.style.height = Ht + 'px';
     cv.width = W * dpr; cv.height = Ht * dpr;
   }
-  addEventListener('resize', resize); resize();
+  // Touch layout when the device's main pointer is a finger. Override with #touch or #desktop on the link.
+  function detectTouch() {
+    if (location.hash === '#touch') return true;
+    if (location.hash === '#desktop') return false;
+    const coarse = matchMedia('(hover: none) and (pointer: coarse)').matches;
+    return coarse || (('ontouchstart' in window) && Math.min(screen.width, screen.height) < 820);
+  }
+  function applyLayout() {
+    TOUCH = detectTouch();
+    docEl.classList.toggle('touch', TOUCH);
+    resize();
+  }
+  const later = () => setTimeout(resize, 250);
+  addEventListener('resize', resize);
+  addEventListener('orientationchange', later);
+  addEventListener('hashchange', applyLayout);
+  document.addEventListener('fullscreenchange', later);
+  document.addEventListener('webkitfullscreenchange', later);
+  if (window.visualViewport) visualViewport.addEventListener('resize', resize);
+  try { matchMedia('(pointer: coarse)').addEventListener('change', applyLayout); } catch (e) {}
+  applyLayout();
 
   function snapCam() { camX = S.x - 200; camY = heightAt(S.x); }
   const climbStats = c => c.minG < 0
@@ -505,7 +620,7 @@ canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
     ctx.setTransform(dpr*sc, 0, 0, dpr*sc, 0, 0);
     const VW = W / sc, VH = 480;
 
-    camX += ((S.x - VW * 0.3) - camX) * 0.2;
+    camX += ((S.x - VW * (TOUCH ? 0.36 : 0.3)) - camX) * 0.2;
     camY += (heightAt(S.x) - camY) * 0.08;
     const base = VH * 0.62;
     const sy = h => base - (h - camY);
@@ -870,8 +985,8 @@ canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
 
     ctx.fillStyle = C.chalk; ctx.font = '400 12px "IBM Plex Mono", monospace';
     ctx.fillText(M.step === 0
-      ? 'Swipe a letter or tap ▲▼ · keys: ↑↓ letter, ←→ move, type A–Z · OK/Enter'
-      : 'Tap a level to ride · keys: ↑↓ choose, Enter ride, Esc edit name', VW / 2, 396);
+      ? (TOUCH ? 'Swipe a letter or tap ▲▼, then tap OK' : 'Swipe a letter or tap ▲▼ · keys: ↑↓ letter, ←→ move, type A–Z · OK/Enter')
+      : (TOUCH ? 'Tap a level to ride · tap a letter to change your name' : 'Tap a level to ride · keys: ↑↓ choose, Enter ride, Esc edit name'), VW / 2, 396);
     ctx.fillStyle = C.muted; ctx.font = `8px ${PIX}`;
     ctx.fillText('GLOBAL LEADERBOARD · COMING SOON', VW / 2, 420);
   }
@@ -983,7 +1098,7 @@ canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
       const d = (next.x - next.w/2 - S.x)/10;
       if (d < 45 && d > 0 && kmh > next.limit && (performance.now()/200|0)%2) {
         ctx.textAlign = 'center'; ctx.fillStyle = C.rust; ctx.font = '800 italic 30px "Barlow Condensed", sans-serif';
-        ctx.fillText('BRAKE!  ←', VW/2, 160);
+        ctx.fillText(TOUCH ? 'BRAKE!' : 'BRAKE!  ←', VW/2, 160);
       }
     }
 
@@ -993,7 +1108,7 @@ canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
       if (d > 0 && d < 50 && st !== 'green' && (performance.now() / 200 | 0) % 2) {
         ctx.textAlign = 'center'; ctx.fillStyle = LAMP[st];
         ctx.font = '800 italic 30px "Barlow Condensed", sans-serif';
-        ctx.fillText(st === 'red' ? 'RED LIGHT · STOP  ←' : 'YELLOW · SLOW DOWN', VW / 2, 160);
+        ctx.fillText(st === 'red' ? (TOUCH ? 'RED LIGHT · STOP' : 'RED LIGHT · STOP  ←') : 'YELLOW · SLOW DOWN', VW / 2, 160);
       }
     }
 
@@ -1017,8 +1132,9 @@ canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
       ctx.fillStyle = 'rgba(27,34,48,.85)';
       ctx.font = '600 14px "IBM Plex Mono", monospace';
       const tw = ctx.measureText(S.msg).width + 28;
-      ctx.fillRect(VW/2 - tw/2, VH - 64, tw, 32);
-      ctx.fillStyle = C.chalk; ctx.fillText(S.msg, VW/2, VH - 43);
+      const my0 = TOUCH ? VH - 118 : VH - 64;   // lift above the thumb pads on phones
+      ctx.fillRect(VW/2 - tw/2, my0, tw, 32);
+      ctx.fillStyle = C.chalk; ctx.fillText(S.msg, VW/2, my0 + 21);
       ctx.globalAlpha = 1;
     }
 
@@ -1038,12 +1154,12 @@ canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
     ctx.textAlign = 'left'; ctx.fillStyle = 'rgba(238,240,234,.75)'; ctx.font = `8px ${PIX}`;
     ctx.fillText(`${playerName()} · ${LV.name.toUpperCase()}`, 14, 136);
 
-    if (S.mode === 'ready') overlay(VW, VH, 'Press → to roll out', `${playerName()} on ${LV.name} · ${LV.blurb}`, 'Esc: main menu');
+    if (S.mode === 'ready') overlay(VW, VH, TOUCH ? 'Hold PEDAL to roll out' : 'Press → to roll out', `${playerName()} on ${LV.name} · ${LV.blurb}`, TOUCH ? 'Tap the road to hop · ☰ Menu at the top' : 'Esc: main menu');
     if (S.mode === 'finished') {
       const final = S.time + S.penalty;
       overlay(VW, VH, S.newBest ? `New best · ${fmt(final)}` : `Finished · ${fmt(final)}`,
         `${playerName()} · ride ${fmt(S.time)} + ${S.penalty}s penalties · ${S.crashes} crash${S.crashes===1?'':'es'} · ${S.bonks} bonk${S.bonks===1?'':'s'}` + (S.best ? ` · Best ${fmt(S.best)}` : ''),
-        'Enter or tap: ride again · Esc: main menu');
+        TOUCH ? 'Tap to ride again · ☰ Menu at the top' : 'Enter or tap: ride again · Esc: main menu');
     }
   }
 
@@ -1062,7 +1178,8 @@ canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
   function frame(now) {
     acc += Math.min(0.1, (now - last) / 1000); last = now;
     while (acc >= 1/120) { update(1/120); acc -= 1/120; }
-    for (const k in btns) if (k in keys) btns[k].classList.toggle('on', keys[k]);
+    for (const k in btns) if (k in keys) btns[k].forEach(el => el.classList.toggle('on', keys[k]));
+    if (docEl.dataset.mode !== S.mode) docEl.dataset.mode = S.mode;
     draw();
     requestAnimationFrame(frame);
   }
